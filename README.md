@@ -2,6 +2,10 @@
 
 A practical guide and starter kit for Cloud Platform Engineers and SREs to get productive with [Kiro](https://kiro.dev) — AWS's AI-powered IDE — for day-to-day infrastructure and operations work.
 
+**[🌐 Live Interactive Guide →](https://nirmal84.github.io/kiro-for-cloud-engineering/)**
+
+![Kiro for Cloud Engineering](docs/screenshot.png)
+
 ## What this repo gives you
 
 | Section | What's inside |
