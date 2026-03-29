@@ -1,0 +1,499 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Networking - 3-tier VPC with public, private, and data subnets across 3 AZs - Managed by Platform Team"
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Environment
+        Parameters:
+          - Environment
+          - Team
+          - CostCentre
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VpcCidr
+          - EnableNatGateway
+    ParameterLabels:
+      VpcCidr:
+        default: VPC CIDR block (e.g. 10.0.0.0/16)
+      EnableNatGateway:
+        default: Enable NAT Gateway (set to false for dev to save cost)
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment
+
+  Team:
+    Type: String
+    Default: platform
+    AllowedPattern: "^[a-z0-9-]+$"
+    Description: Owning team name
+
+  CostCentre:
+    Type: String
+    Description: Finance cost centre code (CC-XXXX)
+    AllowedPattern: "^CC-[0-9]+$"
+
+  VpcCidr:
+    Type: String
+    Default: "10.0.0.0/16"
+    Description: VPC CIDR block
+
+  EnableNatGateway:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Create NAT Gateways for private subnet outbound access
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+  IsMultiNat: !Condition IsProd
+  CreateNatGateway: !Equals [!Ref EnableNatGateway, "true"]
+
+Resources:
+
+  # ============================================================
+  # VPC
+  # ============================================================
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-${AWS::Region}-vpc"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+        - Key: CostCentre
+          Value: !Ref CostCentre
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: StackName
+          Value: !Ref AWS::StackName
+
+  # VPC Flow Logs
+  FlowLogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/OrgPermissionBoundary"
+      RoleName: !Sub "${Team}-${Environment}-flow-logs-role"
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: vpc-flow-logs.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: FlowLogsPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogGroups
+                  - logs:DescribeLogStreams
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/vpc/flow-logs/*"
+
+  FlowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/vpc/flow-logs/${Team}-${Environment}"
+      RetentionInDays: !If [IsProd, 365, 30]
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  VPCFlowLog:
+    Type: AWS::EC2::FlowLog
+    Properties:
+      ResourceId: !Ref VPC
+      ResourceType: VPC
+      TrafficType: ALL
+      LogDestinationType: cloud-watch-logs
+      LogGroupName: !Ref FlowLogGroup
+      DeliverLogsPermissionArn: !GetAtt FlowLogRole.Arn
+
+  # ============================================================
+  # Internet Gateway
+  # ============================================================
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-igw"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # ============================================================
+  # Public Subnets (one per AZ)
+  # ============================================================
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 12, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-${AWS::Region}a-public"
+        - Key: Tier
+          Value: public
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [1, !Cidr [!Ref VpcCidr, 12, 8]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-${AWS::Region}b-public"
+        - Key: Tier
+          Value: public
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  PublicSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [2, !Cidr [!Ref VpcCidr, 12, 8]]
+      AvailabilityZone: !Select [2, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-${AWS::Region}c-public"
+        - Key: Tier
+          Value: public
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  # ============================================================
+  # Private Subnets (application tier)
+  # ============================================================
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [3, !Cidr [!Ref VpcCidr, 12, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-${AWS::Region}a-private"
+        - Key: Tier
+          Value: private
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [4, !Cidr [!Ref VpcCidr, 12, 8]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-${AWS::Region}b-private"
+        - Key: Tier
+          Value: private
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  PrivateSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [5, !Cidr [!Ref VpcCidr, 12, 8]]
+      AvailabilityZone: !Select [2, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-${AWS::Region}c-private"
+        - Key: Tier
+          Value: private
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  # ============================================================
+  # Data Subnets (database tier — no internet access)
+  # ============================================================
+  DataSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [6, !Cidr [!Ref VpcCidr, 12, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-${AWS::Region}a-data"
+        - Key: Tier
+          Value: data
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  DataSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [7, !Cidr [!Ref VpcCidr, 12, 8]]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-${AWS::Region}b-data"
+        - Key: Tier
+          Value: data
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  DataSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Select [8, !Cidr [!Ref VpcCidr, 12, 8]]
+      AvailabilityZone: !Select [2, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-${AWS::Region}c-data"
+        - Key: Tier
+          Value: data
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  # ============================================================
+  # NAT Gateways (prod: one per AZ for HA; non-prod: one)
+  # ============================================================
+  EipNatA:
+    Type: AWS::EC2::EIP
+    Condition: CreateNatGateway
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-nat-eip-a"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  NatGatewayA:
+    Type: AWS::EC2::NatGateway
+    Condition: CreateNatGateway
+    Properties:
+      AllocationId: !GetAtt EipNatA.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-nat-a"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  # ============================================================
+  # Route Tables
+  # ============================================================
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-public-rt"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-private-rt"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Condition: CreateNatGateway
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NatGatewayA
+
+  # Subnet associations (abbreviated — associate all subnets)
+  PublicSubnetAAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetA
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateSubnetAAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetA
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ============================================================
+  # VPC Endpoints (S3 and DynamoDB Gateway endpoints are free)
+  # ============================================================
+  S3GatewayEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      VpcEndpointType: Gateway
+      RouteTableIds:
+        - !Ref PrivateRouteTable
+        - !Ref PublicRouteTable
+
+  # Interface endpoints for SSM, ECR, Secrets Manager (in private subnets)
+  SecretsManagerEndpointSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${Team}-${Environment}-vpc-endpoints-sg"
+      GroupDescription: Security group for VPC interface endpoints
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref VpcCidr
+      Tags:
+        - Key: Name
+          Value: !Sub "${Team}-${Environment}-vpc-endpoints-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  SecretsManagerEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.secretsmanager"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref SecretsManagerEndpointSG
+
+  SSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      VpcEndpointType: Interface
+      PrivateDnsEnabled: true
+      SubnetIds:
+        - !Ref PrivateSubnetA
+        - !Ref PrivateSubnetB
+      SecurityGroupIds:
+        - !Ref SecretsManagerEndpointSG
+
+  # ============================================================
+  # SSM Parameters (for other stacks to consume)
+  # ============================================================
+  VpcIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/platform/network/${Environment}/vpc-id"
+      Type: String
+      Value: !Ref VPC
+
+  PrivateSubnetIdsParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/platform/network/${Environment}/private-subnet-ids"
+      Type: StringList
+      Value: !Join [",", [!Ref PrivateSubnetA, !Ref PrivateSubnetB, !Ref PrivateSubnetC]]
+
+  PublicSubnetIdsParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/platform/network/${Environment}/public-subnet-ids"
+      Type: StringList
+      Value: !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB, !Ref PublicSubnetC]]
+
+  DataSubnetIdsParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/platform/network/${Environment}/data-subnet-ids"
+      Type: StringList
+      Value: !Join [",", [!Ref DataSubnetA, !Ref DataSubnetB, !Ref DataSubnetC]]
+
+Outputs:
+  VpcId:
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-vpc-id"
+
+  PrivateSubnetIds:
+    Value: !Join [",", [!Ref PrivateSubnetA, !Ref PrivateSubnetB, !Ref PrivateSubnetC]]
+    Export:
+      Name: !Sub "${AWS::StackName}-private-subnet-ids"
+
+  PublicSubnetIds:
+    Value: !Join [",", [!Ref PublicSubnetA, !Ref PublicSubnetB, !Ref PublicSubnetC]]
+    Export:
+      Name: !Sub "${AWS::StackName}-public-subnet-ids"
+
+  DataSubnetIds:
+    Value: !Join [",", [!Ref DataSubnetA, !Ref DataSubnetB, !Ref DataSubnetC]]
+    Export:
+      Name: !Sub "${AWS::StackName}-data-subnet-ids"

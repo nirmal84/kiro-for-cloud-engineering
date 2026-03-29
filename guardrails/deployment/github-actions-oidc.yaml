@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "IAM - GitHub Actions OIDC provider and deployment roles for CI/CD - Managed by Platform Team"
+
+# Deploy this once per account. It creates:
+# 1. The GitHub Actions OIDC identity provider
+# 2. A deploy role for each environment that GitHub Actions assumes via OIDC
+#
+# All roles use least-privilege scoped to CloudFormation + service-specific permissions.
+# Roles include the OrgPermissionBoundary.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Environment
+        Parameters:
+          - Environment
+          - Team
+      - Label:
+          default: GitHub Configuration
+        Parameters:
+          - GitHubOrg
+          - GitHubRepo
+          - DeployBranch
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, prod]
+
+  Team:
+    Type: String
+    AllowedPattern: "^[a-z0-9-]+$"
+
+  GitHubOrg:
+    Type: String
+    Description: Your GitHub organisation name (e.g. my-company)
+
+  GitHubRepo:
+    Type: String
+    Description: Repository name or wildcard (e.g. infra-repo or *)
+
+  DeployBranch:
+    Type: String
+    Default: "main"
+    Description: Branch allowed to deploy (e.g. main)
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
+Resources:
+
+  # ============================================================
+  # OIDC Provider (one per account — skip if already exists)
+  # ============================================================
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  # ============================================================
+  # Deployment Role
+  # ============================================================
+  GitHubActionsDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/OrgPermissionBoundary"
+      RoleName: !Sub "GitHubActions-Deploy-${Environment}"
+      Description: !Sub "Assumed by GitHub Actions for ${Environment} deployments from ${GitHubOrg}/${GitHubRepo}"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref GitHubOIDCProvider
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
+              StringLike:
+                "token.actions.githubusercontent.com:sub":
+                  !Sub "repo:${GitHubOrg}/${GitHubRepo}:ref:refs/heads/${DeployBranch}"
+      Policies:
+        - PolicyName: CloudFormationDeploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # CloudFormation operations
+              - Sid: CloudFormationAccess
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DeleteStack
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:GetTemplate
+                  - cloudformation:ValidateTemplate
+                  - cloudformation:ListStackResources
+                Resource:
+                  - !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:stack/${Team}-*"
+                  - !Sub "arn:aws:cloudformation:*:${AWS::AccountId}:changeSet/${Team}-*"
+
+              # S3 for template uploads
+              - Sid: S3TemplateAccess
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::artifacts-${AWS::AccountId}-*"
+                  - !Sub "arn:aws:s3:::artifacts-${AWS::AccountId}-*/*"
+
+              # Pass role to CloudFormation (for creating IAM resources in stacks)
+              - Sid: PassRoleToCloudFormation
+                Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/CloudFormationServiceRole"
+                Condition:
+                  StringEquals:
+                    "iam:PassedToService": cloudformation.amazonaws.com
+
+              # SSM read access for parameter resolution
+              - Sid: SSMReadAccess
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/platform/*"
+                  - !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/${Environment}/*"
+
+  # ============================================================
+  # CloudFormation Service Role
+  # (the role CloudFormation itself assumes to create resources)
+  # ============================================================
+  CloudFormationServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/OrgPermissionBoundary"
+      RoleName: "CloudFormationServiceRole"
+      Description: Role assumed by CloudFormation to create/update/delete stack resources
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Scope this down to only the services your stacks actually create
+        # Starting broad here — tighten as you learn what stacks need
+        - arn:aws:iam::aws:policy/PowerUserAccess
+
+Outputs:
+  DeployRoleArn:
+    Value: !GetAtt GitHubActionsDeployRole.Arn
+    Description: "Add this ARN to GitHub repository variable AWS_DEPLOY_ROLE_ARN"
+    Export:
+      Name: !Sub "${AWS::StackName}-deploy-role-arn"
+
+  OIDCProviderArn:
+    Value: !Ref GitHubOIDCProvider
+    Export:
+      Name: !Sub "${AWS::StackName}-oidc-provider-arn"

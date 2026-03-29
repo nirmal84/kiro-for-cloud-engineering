@@ -1,0 +1,11 @@
+.DS_Store
+*.swp
+*.swo
+__pycache__/
+*.pyc
+.env
+.env.*
+node_modules/
+.cfn-lint/
+packaged-*.yaml
+samconfig.toml

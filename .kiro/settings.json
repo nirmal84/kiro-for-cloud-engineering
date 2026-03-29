@@ -1,0 +1,43 @@
+{
+  "mcpServers": {
+    "aws-docs": {
+      "command": "uvx",
+      "args": ["awslabs.aws-documentation-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    },
+    "cloudformation": {
+      "command": "uvx",
+      "args": ["awslabs.aws-cloudformation-mcp-server@latest"],
+      "env": {
+        "AWS_PROFILE": "${env:AWS_PROFILE}",
+        "AWS_REGION": "${env:AWS_DEFAULT_REGION}",
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    },
+    "cost-analysis": {
+      "command": "uvx",
+      "args": ["awslabs.aws-cost-analysis-mcp-server@latest"],
+      "env": {
+        "AWS_PROFILE": "${env:AWS_PROFILE}",
+        "AWS_REGION": "${env:AWS_DEFAULT_REGION}",
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    },
+    "cdk": {
+      "command": "uvx",
+      "args": ["awslabs.cdk-mcp-server@latest"],
+      "env": {
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${env:GITHUB_TOKEN}"
+      }
+    }
+  }
+}

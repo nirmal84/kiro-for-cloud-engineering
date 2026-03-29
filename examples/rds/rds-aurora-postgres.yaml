@@ -1,0 +1,364 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Data - Aurora PostgreSQL Serverless v2 cluster with automated backups and secrets rotation"
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Environment
+        Parameters:
+          - Environment
+          - Team
+          - CostCentre
+          - Application
+      - Label:
+          default: Database Configuration
+        Parameters:
+          - DatabaseName
+          - MasterUsername
+          - MinCapacity
+          - MaxCapacity
+      - Label:
+          default: Networking (resolved from SSM)
+        Parameters:
+          - VpcId
+          - DataSubnetIds
+          - AppSecurityGroupId
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, staging, prod]
+
+  Team:
+    Type: String
+    AllowedPattern: "^[a-z0-9-]+$"
+
+  CostCentre:
+    Type: String
+    AllowedPattern: "^CC-[0-9]+$"
+
+  Application:
+    Type: String
+    AllowedPattern: "^[a-z0-9-]+$"
+
+  DatabaseName:
+    Type: String
+    AllowedPattern: "^[a-z][a-z0-9_]+$"
+    Description: Initial database name (lowercase, underscores allowed)
+
+  MasterUsername:
+    Type: String
+    Default: dbadmin
+    AllowedPattern: "^[a-z][a-z0-9]+$"
+
+  MinCapacity:
+    Type: Number
+    Default: 0.5
+    Description: Minimum ACUs for Aurora Serverless v2 (0.5 = cheapest)
+
+  MaxCapacity:
+    Type: Number
+    Default: 8
+    Description: Maximum ACUs for Aurora Serverless v2
+
+  VpcId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::VPC::Id>
+    Default: /platform/network/prod/vpc-id
+
+  DataSubnetIds:
+    Type: AWS::SSM::Parameter::Value<List<AWS::EC2::Subnet::Id>>
+    Default: /platform/network/prod/data-subnet-ids
+
+  AppSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group ID of the application that will connect to this database
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
+Resources:
+
+  # ============================================================
+  # KMS Key for encryption
+  # ============================================================
+  DatabaseKMSKey:
+    Type: AWS::KMS::Key
+    DeletionPolicy: !If [IsProd, Retain, Delete]
+    UpdateReplacePolicy: !If [IsProd, Retain, Delete]
+    Properties:
+      Description: !Sub "KMS key for ${Application} Aurora cluster - ${Environment}"
+      EnableKeyRotation: true
+      KeyPolicy:
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "kms:*"
+            Resource: "*"
+          - Effect: Allow
+            Principal:
+              Service: rds.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: "*"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+        - Key: Application
+          Value: !Ref Application
+        - Key: ManagedBy
+          Value: cloudformation
+
+  DatabaseKMSKeyAlias:
+    Type: AWS::KMS::Alias
+    Properties:
+      AliasName: !Sub "alias/${Team}-${Environment}-${Application}-db"
+      TargetKeyId: !Ref DatabaseKMSKey
+
+  # ============================================================
+  # Secrets Manager — master credentials with auto-rotation
+  # ============================================================
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    DeletionPolicy: !If [IsProd, Retain, Delete]
+    UpdateReplacePolicy: !If [IsProd, Retain, Delete]
+    Properties:
+      Name: !Sub "${Environment}/${Application}/db-credentials"
+      Description: !Sub "Aurora credentials for ${Application} in ${Environment}"
+      KmsKeyId: !Ref DatabaseKMSKey
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "${MasterUsername}"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\\'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+        - Key: Application
+          Value: !Ref Application
+        - Key: ManagedBy
+          Value: cloudformation
+
+  # Attach secret to cluster for auto-rotation support
+  SecretTargetAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DatabaseSecret
+      TargetId: !Ref AuroraCluster
+      TargetType: AWS::RDS::DBCluster
+
+  # ============================================================
+  # Security Group
+  # ============================================================
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${Application}-${Environment}-db-sg"
+      GroupDescription: !Sub "Database security group for ${Application}"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref AppSecurityGroupId
+          Description: !Sub "PostgreSQL from ${Application} application tier"
+      Tags:
+        - Key: Name
+          Value: !Sub "${Application}-${Environment}-db-sg"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+
+  # ============================================================
+  # Subnet Group
+  # ============================================================
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub "Data tier subnets for ${Application} Aurora cluster"
+      DBSubnetGroupName: !Sub "${Team}-${Environment}-${Application}-subnet-group"
+      SubnetIds: !Ref DataSubnetIds
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+        - Key: Application
+          Value: !Ref Application
+
+  # ============================================================
+  # Cluster Parameter Group
+  # ============================================================
+  ClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description: !Sub "Aurora PostgreSQL cluster parameters for ${Application}"
+      Family: aurora-postgresql15
+      Parameters:
+        log_statement: "ddl"
+        log_min_duration_statement: "1000"  # Log queries >1s
+        shared_preload_libraries: "pg_stat_statements"
+        rds.force_ssl: "1"                  # Require TLS connections
+
+  # ============================================================
+  # Aurora Cluster
+  # ============================================================
+  AuroraCluster:
+    Type: AWS::RDS::DBCluster
+    DeletionPolicy: !If [IsProd, Retain, Delete]
+    UpdateReplacePolicy: !If [IsProd, Retain, Delete]
+    Properties:
+      DBClusterIdentifier: !Sub "${Team}-${Environment}-${Application}-cluster"
+      Engine: aurora-postgresql
+      EngineVersion: "15.4"
+      DatabaseName: !Ref DatabaseName
+      MasterUsername: !Sub "{{resolve:secretsmanager:${DatabaseSecret}:SecretString:username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${DatabaseSecret}:SecretString:password}}"
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      VpcSecurityGroupIds:
+        - !Ref DatabaseSecurityGroup
+      DBClusterParameterGroupName: !Ref ClusterParameterGroup
+      StorageEncrypted: true
+      KmsKeyId: !Ref DatabaseKMSKey
+      BackupRetentionPeriod: !If [IsProd, 35, 7]
+      PreferredBackupWindow: "02:00-03:00"
+      PreferredMaintenanceWindow: "sun:03:00-sun:04:00"
+      DeletionProtection: !If [IsProd, true, false]
+      EnableCloudwatchLogsExports:
+        - postgresql
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: !Ref MinCapacity
+        MaxCapacity: !Ref MaxCapacity
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+        - Key: CostCentre
+          Value: !Ref CostCentre
+        - Key: Application
+          Value: !Ref Application
+        - Key: ManagedBy
+          Value: cloudformation
+        - Key: StackName
+          Value: !Ref AWS::StackName
+
+  # ============================================================
+  # DB Instance (Serverless v2 requires at least one instance)
+  # ============================================================
+  AuroraInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: !If [IsProd, Retain, Delete]
+    UpdateReplacePolicy: !If [IsProd, Retain, Delete]
+    Properties:
+      DBInstanceIdentifier: !Sub "${Team}-${Environment}-${Application}-instance-1"
+      DBClusterIdentifier: !Ref AuroraCluster
+      DBInstanceClass: db.serverless
+      Engine: aurora-postgresql
+      PubliclyAccessible: false
+      EnablePerformanceInsights: true
+      PerformanceInsightsRetentionPeriod: !If [IsProd, 731, 7]
+      PerformanceInsightsKMSKeyId: !Ref DatabaseKMSKey
+      MonitoringInterval: 60
+      MonitoringRoleArn: !Sub "arn:aws:iam::${AWS::AccountId}:role/rds-monitoring-role"
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Team
+          Value: !Ref Team
+        - Key: Application
+          Value: !Ref Application
+
+  # ============================================================
+  # CloudWatch Alarms
+  # ============================================================
+  HighConnectionsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Application}-${Environment}-db-high-connections"
+      AlarmDescription: Database connection count is high
+      MetricName: DatabaseConnections
+      Namespace: AWS/RDS
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref AuroraCluster
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 800
+      ComparisonOperator: GreaterThanThreshold
+
+  HighCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Application}-${Environment}-db-high-cpu"
+      AlarmDescription: Database CPU utilisation is high
+      MetricName: CPUUtilization
+      Namespace: AWS/RDS
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref AuroraCluster
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+
+  # ============================================================
+  # SSM Parameters for application consumption
+  # ============================================================
+  DbEndpointParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${Environment}/${Application}/db-endpoint"
+      Type: String
+      Value: !GetAtt AuroraCluster.Endpoint.Address
+
+  DbPortParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${Environment}/${Application}/db-port"
+      Type: String
+      Value: !GetAtt AuroraCluster.Endpoint.Port
+
+  DbNameParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${Environment}/${Application}/db-name"
+      Type: String
+      Value: !Ref DatabaseName
+
+  DbSecretArnParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/${Environment}/${Application}/db-secret-arn"
+      Type: String
+      Value: !Ref DatabaseSecret
+
+Outputs:
+  ClusterEndpoint:
+    Value: !GetAtt AuroraCluster.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-db-endpoint"
+
+  ClusterPort:
+    Value: !GetAtt AuroraCluster.Endpoint.Port
+    Export:
+      Name: !Sub "${AWS::StackName}-db-port"
+
+  DatabaseSecretArn:
+    Value: !Ref DatabaseSecret
+    Export:
+      Name: !Sub "${AWS::StackName}-db-secret-arn"
+
+  DatabaseSecurityGroupId:
+    Value: !Ref DatabaseSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-db-sg-id"

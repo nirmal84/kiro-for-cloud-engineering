@@ -1,0 +1,32 @@
+---
+# cfn-lint configuration for this project
+# Install: pip install cfn-lint
+# Run: cfn-lint templates/**/*.yaml
+
+# Regions to validate against
+regions:
+  - eu-west-1
+  - eu-west-2
+
+# Include informational checks (tagging, naming)
+include_checks:
+  - I
+
+# Ignore specific rules that don't apply to your org
+# Uncomment and adjust as needed:
+ignore_checks:
+  # W3002 — warns about dynamic S3 template URLs (expected in nested stacks)
+  # - W3002
+
+# Custom rules directory (add your own cfn-lint rules here)
+# custom_rules: cfn-lint-rules/
+
+# Template file paths to lint
+templates:
+  - templates/**/*.yaml
+  - examples/**/*.yaml
+  - guardrails/**/*.yaml
+
+# Minimum severity to fail on (informational, warning, error)
+# In CI, recommend 'warning' to catch all issues
+include_experimental: false

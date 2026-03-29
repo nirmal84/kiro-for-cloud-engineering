@@ -1,0 +1,228 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Security - Service Control Policies for AWS Organizations - Managed by Platform Team"
+
+# Deploy this in the MANAGEMENT ACCOUNT ONLY via AWS Organizations
+# These SCPs are applied to OUs and enforce hard limits that IAM policies cannot override.
+#
+# CAUTION: Incorrectly written SCPs can lock out all access to an account.
+# Test in a sandbox OU before applying to production OUs.
+
+Resources:
+
+  # ============================================================
+  # Baseline Security SCP — applied to ALL OUs except Root
+  # ============================================================
+  BaselineSecuritySCP:
+    Type: AWS::Organizations::Policy
+    Properties:
+      Type: SERVICE_CONTROL_POLICY
+      Name: "baseline-security-controls"
+      Description: "Prevents disabling core security services and enforces security baselines"
+      Content: |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyDisableCloudTrail",
+              "Effect": "Deny",
+              "Action": [
+                "cloudtrail:DeleteTrail",
+                "cloudtrail:StopLogging",
+                "cloudtrail:UpdateTrail"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Sid": "DenyDisableConfig",
+              "Effect": "Deny",
+              "Action": [
+                "config:DeleteConfigRule",
+                "config:DeleteConfigurationRecorder",
+                "config:DeleteDeliveryChannel",
+                "config:StopConfigurationRecorder"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Sid": "DenyDisableGuardDuty",
+              "Effect": "Deny",
+              "Action": [
+                "guardduty:DeleteDetector",
+                "guardduty:DisassociateFromMasterAccount",
+                "guardduty:DisassociateMembers",
+                "guardduty:StopMonitoringMembers",
+                "guardduty:UpdateDetector"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Sid": "DenyDisableSecurityHub",
+              "Effect": "Deny",
+              "Action": [
+                "securityhub:DeleteHub",
+                "securityhub:DisableSecurityHub",
+                "securityhub:DisassociateFromMasterAccount"
+              ],
+              "Resource": "*"
+            },
+            {
+              "Sid": "DenyLeaveOrganization",
+              "Effect": "Deny",
+              "Action": "organizations:LeaveOrganization",
+              "Resource": "*"
+            },
+            {
+              "Sid": "DenyRootActions",
+              "Effect": "Deny",
+              "NotAction": [
+                "iam:CreateVirtualMFADevice",
+                "iam:EnableMFADevice",
+                "iam:GetUser",
+                "iam:ListMFADevices",
+                "iam:ListVirtualMFADevices",
+                "iam:ResyncMFADevice",
+                "sts:GetSessionToken"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "StringLike": {
+                  "aws:PrincipalArn": "arn:aws:iam::*:root"
+                }
+              }
+            }
+          ]
+        }
+
+  # ============================================================
+  # Region Restriction SCP — limit deployments to approved regions
+  # ============================================================
+  RegionRestrictionSCP:
+    Type: AWS::Organizations::Policy
+    Properties:
+      Type: SERVICE_CONTROL_POLICY
+      Name: "region-restriction"
+      Description: "Restricts deployments to approved AWS regions only"
+      Content: |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyUnapprovedRegions",
+              "Effect": "Deny",
+              "NotAction": [
+                "a4b:*",
+                "acm:*",
+                "aws-marketplace-management:*",
+                "aws-marketplace:*",
+                "budgets:*",
+                "ce:*",
+                "chime:*",
+                "cloudfront:*",
+                "config:*",
+                "cur:*",
+                "directconnect:*",
+                "ec2:DescribeRegions",
+                "ec2:DescribeTransitGateways",
+                "ec2:DescribeVpnGateways",
+                "fms:*",
+                "globalaccelerator:*",
+                "health:*",
+                "iam:*",
+                "importexport:*",
+                "kms:*",
+                "mobileanalytics:*",
+                "networkmanager:*",
+                "organizations:*",
+                "pricing:*",
+                "route53:*",
+                "route53domains:*",
+                "s3:GetAccountPublic*",
+                "s3:ListAllMyBuckets",
+                "s3:PutAccountPublic*",
+                "shield:*",
+                "sts:*",
+                "support:*",
+                "trustedadvisor:*",
+                "waf-regional:*",
+                "waf:*",
+                "wafv2:*",
+                "wellarchitected:*"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "StringNotIn": {
+                  "aws:RequestedRegion": [
+                    "eu-west-1",
+                    "eu-west-2"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+
+  # ============================================================
+  # Production Account SCP — tighter controls for prod OUs
+  # ============================================================
+  ProductionAccountSCP:
+    Type: AWS::Organizations::Policy
+    Properties:
+      Type: SERVICE_CONTROL_POLICY
+      Name: "production-account-controls"
+      Description: "Additional restrictions for production accounts — no direct console changes"
+      Content: |
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "DenyDirectIAMChanges",
+              "Effect": "Deny",
+              "Action": [
+                "iam:AttachRolePolicy",
+                "iam:CreateRole",
+                "iam:DeleteRole",
+                "iam:DetachRolePolicy",
+                "iam:PutRolePolicy",
+                "iam:UpdateRole",
+                "iam:CreatePolicy",
+                "iam:DeletePolicy",
+                "iam:CreatePolicyVersion",
+                "iam:DeletePolicyVersion"
+              ],
+              "Resource": "*",
+              "Condition": {
+                "ArnNotLike": {
+                  "aws:PrincipalArn": [
+                    "arn:aws:iam::*:role/GitHubActions-Deploy-prod",
+                    "arn:aws:iam::*:role/CloudFormationServiceRole",
+                    "arn:aws:iam::*:role/PlatformAdminAccess"
+                  ]
+                }
+              }
+            },
+            {
+              "Sid": "DenyEC2TerminationWithoutTag",
+              "Effect": "Deny",
+              "Action": "ec2:TerminateInstances",
+              "Resource": "*",
+              "Condition": {
+                "StringNotEquals": {
+                  "aws:RequestTag/ManagedBy": "cloudformation"
+                }
+              }
+            }
+          ]
+        }
+
+Outputs:
+  BaselineSCPId:
+    Value: !Ref BaselineSecuritySCP
+    Description: "Attach this SCP to all OUs except Root and Security OU"
+
+  RegionRestrictionSCPId:
+    Value: !Ref RegionRestrictionSCP
+    Description: "Attach this SCP to Workloads and Infrastructure OUs"
+
+  ProductionSCPId:
+    Value: !Ref ProductionAccountSCP
+    Description: "Attach this SCP to the Workloads/Prod OU only"

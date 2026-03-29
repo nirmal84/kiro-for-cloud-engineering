@@ -1,0 +1,94 @@
+# Account Vending — Account Definition
+#
+# Submit a PR adding a file like this to the account-vending repo.
+# The pipeline will provision the account, apply the baseline, and
+# create SSO assignments automatically.
+#
+# Replace ALL placeholder values before submitting.
+
+account:
+  # Unique, descriptive name. Used as the AWS account name.
+  # Format: {org-prefix}-{team}-{environment}
+  name: "myorg-payments-prod"
+
+  # Email must be unique across AWS Organisation.
+  # Use a distribution list, not an individual's email.
+  # Format: aws+{account-name}@yourorg.com
+  email: "aws+myorg-payments-prod@yourorg.com"
+
+  # Which OU to place this account in.
+  # Options: workloads/prod | workloads/non-prod | sandbox | security | infrastructure
+  organizational_unit: "workloads/prod"
+
+  # Account alias (used as login URL: https://{alias}.signin.aws.amazon.com/console)
+  alias: "myorg-payments-prod"
+
+  # Optional: monthly budget limit in USD. Exceeding 80% triggers alert.
+  monthly_budget_usd: 5000
+
+metadata:
+  team: "payments"
+  cost_centre: "CC-1042"
+  environment: "prod"   # dev | staging | prod
+  purpose: "Production environment for payment processing service"
+
+  # Business owner (gets billing alerts and access reviews)
+  business_owner: "jane.smith@yourorg.com"
+
+  # Technical owner (gets security findings and operational alerts)
+  technical_owner: "platform-team@yourorg.com"
+
+  # Slack channel for alerts
+  alert_channel: "#payments-alerts"
+
+networking:
+  # VPC CIDR — must not overlap with any existing VPC in the org
+  # See networking CIDR plan in the platform runbook before choosing
+  vpc_cidr: "10.2.0.0/16"
+
+  # Which region is primary
+  primary_region: "eu-west-1"
+
+  # Whether to attach to Transit Gateway (required for prod; optional for sandbox)
+  transit_gateway_attachment: true
+
+  # Whether to create a second VPC in DR region
+  dr_region_enabled: false   # Set true for P0 services
+
+baseline:
+  # These are always applied — listed here for visibility
+  security_baseline: true     # CloudTrail, Config, GuardDuty, Security Hub
+  iam_baseline: true          # Permission boundary, break-glass role, audit role
+  network_baseline: true      # VPC, subnets, TGW attachment, VPC endpoints
+  budget_baseline: true       # Budget alert at 80%
+
+  # Optional baselines
+  eks_baseline: false         # EKS cluster with standard node groups
+  ecr_repos: []               # List of ECR repo names to pre-create
+
+sso_assignments:
+  # Each entry grants an IAM Identity Center permission set to a group in this account
+  # Groups must exist in your Identity Provider (Okta/AzureAD/etc.)
+  - group: "aws-payments-developers"
+    permission_set: "DeveloperAccess"         # Read + limited write in non-prod
+    environments: ["dev", "staging"]
+
+  - group: "aws-payments-platform"
+    permission_set: "PlatformEngineerAccess"  # Broader infrastructure access
+    environments: ["dev", "staging", "prod"]
+
+  - group: "aws-platform-admins"
+    permission_set: "PlatformAdminAccess"     # Full admin (with MFA requirement)
+    environments: ["prod"]
+
+  - group: "aws-security-team"
+    permission_set: "SecurityAuditAccess"     # Read-only + Security Hub
+    environments: ["dev", "staging", "prod"]
+
+tags:
+  # These tags are applied to the account itself in AWS Organizations
+  # and to all resources via the baseline stack
+  Team: "payments"
+  CostCentre: "CC-1042"
+  Environment: "prod"
+  ManagedBy: "account-vending"

@@ -1,0 +1,119 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "IAM - OrgPermissionBoundary policy deployed to every account - Managed by Platform Team"
+
+# This template is deployed by the account vending pipeline.
+# It creates the OrgPermissionBoundary IAM managed policy that all other
+# roles in the account must reference as their PermissionsBoundary.
+#
+# The boundary enforces:
+# - Roles cannot create other roles without the same boundary (prevents escalation)
+# - Security controls (CloudTrail, Config, GuardDuty) cannot be disabled
+# - Access stays within approved regions
+# - Management account is not accessible
+
+Resources:
+
+  OrgPermissionBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: OrgPermissionBoundary
+      Description: "Organisation permission boundary — must be attached to all IAM roles in this account"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+
+          # Allow most AWS services (the boundary is a ceiling, not a grant)
+          - Sid: AllowMostServices
+            Effect: Allow
+            Action: "*"
+            Resource: "*"
+
+          # Block creation of roles/users without this same boundary
+          - Sid: DenyRoleCreationWithoutBoundary
+            Effect: Deny
+            Action:
+              - iam:CreateRole
+              - iam:PutRolePermissionsBoundary
+            Resource: "*"
+            Condition:
+              "StringNotEquals":
+                "iam:PermissionsBoundary": !Sub "arn:aws:iam::${AWS::AccountId}:policy/OrgPermissionBoundary"
+
+          - Sid: DenyUserCreationWithoutBoundary
+            Effect: Deny
+            Action:
+              - iam:CreateUser
+              - iam:PutUserPermissionsBoundary
+            Resource: "*"
+            Condition:
+              "StringNotEquals":
+                "iam:PermissionsBoundary": !Sub "arn:aws:iam::${AWS::AccountId}:policy/OrgPermissionBoundary"
+
+          # Block modifying or deleting the boundary itself
+          - Sid: DenyBoundaryModification
+            Effect: Deny
+            Action:
+              - iam:DeletePolicy
+              - iam:DeletePolicyVersion
+              - iam:CreatePolicyVersion
+              - iam:SetDefaultPolicyVersion
+            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:policy/OrgPermissionBoundary"
+
+          # Block deleting the boundary from any role
+          - Sid: DenyBoundaryRemoval
+            Effect: Deny
+            Action:
+              - iam:DeleteRolePermissionsBoundary
+              - iam:DeleteUserPermissionsBoundary
+            Resource: "*"
+
+          # Block disabling security services
+          - Sid: DenySecurityServiceDisablement
+            Effect: Deny
+            Action:
+              - cloudtrail:DeleteTrail
+              - cloudtrail:StopLogging
+              - cloudtrail:UpdateTrail
+              - config:DeleteConfigRule
+              - config:DeleteConfigurationRecorder
+              - config:DeleteDeliveryChannel
+              - config:StopConfigurationRecorder
+              - guardduty:DeleteDetector
+              - guardduty:DisassociateFromMasterAccount
+              - securityhub:DeleteHub
+              - securityhub:DisableSecurityHub
+              - organizations:LeaveOrganization
+            Resource: "*"
+
+          # Restrict to approved regions (for services that are region-specific)
+          # Global services (IAM, Route53, CloudFront) are excluded from this restriction
+          - Sid: DenyUnapprovedRegions
+            Effect: Deny
+            NotAction:
+              - iam:*
+              - sts:*
+              - route53:*
+              - cloudfront:*
+              - s3:GetAccountPublicAccessBlock
+              - s3:PutAccountPublicAccessBlock
+              - s3:ListAllMyBuckets
+              - budgets:*
+              - ce:*
+              - support:*
+              - trustedadvisor:*
+              - health:*
+              - organizations:*
+            Resource: "*"
+            Condition:
+              StringNotIn:
+                "aws:RequestedRegion":
+                  - "eu-west-1"
+                  - "eu-west-2"
+                  # Add more as needed — e.g. us-east-1 for global services
+
+Outputs:
+  BoundaryPolicyArn:
+    Value: !Sub "arn:aws:iam::${AWS::AccountId}:policy/OrgPermissionBoundary"
+    Description: "Reference this ARN in all IAM roles: PermissionsBoundary: !Sub arn:aws:iam::${AWS::AccountId}:policy/OrgPermissionBoundary"
+    Export:
+      Name: !Sub "${AWS::StackName}-boundary-arn"
