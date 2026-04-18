@@ -501,7 +501,7 @@ MyBucket:
     <div class="skill-detail" id="skill-detail">
       <div class="skill-detail-header">
         <span id="skill-detail-cmd" class="skill-name">/cfn-review</span>
-        <a id="skill-detail-link" href="https://github.com/nirmal84/kiro-for-cloud-engineering/blob/master/skills/cloudformation/cfn-review.md" target="_blank" style="font-size:11px; color:var(--blue); text-decoration:none; margin-left:auto;">View source →</a>
+        <a id="skill-detail-link" href="https://github.com/nirmal84/kiro-for-cloud-engineering/blob/master/skills/cfn-review/SKILL.md" target="_blank" style="font-size:11px; color:var(--blue); text-decoration:none; margin-left:auto;">View source →</a>
       </div>
       <div class="skill-detail-body">
         <div class="skill-col">
@@ -939,7 +939,7 @@ function updateSim() {
 // ─── SKILLS SIMULATOR ─────────────────────────────────────────────────────────
 const SKILLS = {
   'cfn-review': {
-    link: 'skills/cloudformation/cfn-review.md',
+    link: 'skills/cfn-review/SKILL.md',
     prompt: `Review the open CloudFormation template for:
 
 1. Security issues
@@ -972,7 +972,7 @@ const SKILLS = {
 • Safe to deploy to prod: ❌ NO — HIGH severity issues present`
   },
   'security-scan': {
-    link: 'skills/security/security-scan.md',
+    link: 'skills/security-scan/SKILL.md',
     prompt: `Perform a security scan against:
 
 • CIS AWS Foundations Benchmark (Level 1 & 2)
@@ -996,7 +996,7 @@ Map all findings to framework controls.`,
 **Posture: 4 failures | Deploy blocker: YES**`
   },
   'iam-review': {
-    link: 'skills/security/iam-review.md',
+    link: 'skills/iam-review/SKILL.md',
     prompt: `Review all IAM resources for:
 
 • Trust policies — who can assume this role?
@@ -1020,7 +1020,7 @@ Report privilege escalation risk for each role.`,
 **Action:** Add boundary + scope S3 to specific bucket ARN`
   },
   'cfn-explain': {
-    link: 'skills/cloudformation/cfn-explain.md',
+    link: 'skills/cfn-explain/SKILL.md',
     prompt: `Explain the open template in plain English:
 
 1. What it deploys (no jargon)
@@ -1051,7 +1051,7 @@ Total: ~$176/month at minimum scale
 You must disable it manually before deleting the stack.`
   },
   'cost-estimate': {
-    link: 'skills/cost/cost-estimate.md',
+    link: 'skills/cost-estimate/SKILL.md',
     prompt: `Estimate monthly AWS cost for the open template.
 
 For each resource with ongoing cost:
@@ -1077,7 +1077,7 @@ For each resource with ongoing cost:
 3. Aurora Serverless v2 → save ~$60/month at low load`
   },
   'change-impact': {
-    link: 'skills/cloudformation/change-impact.md',
+    link: 'skills/change-impact/SKILL.md',
     prompt: `Assess blast radius of current changes:
 
 For each changed resource classify:
@@ -1104,7 +1104,7 @@ Schedule maintenance window. Back up RDS before deploying.
 Test in staging first. Have rollback plan ready.`
   },
   'drift-check': {
-    link: 'skills/cloudformation/drift-check.md',
+    link: 'skills/drift-check/SKILL.md',
     prompt: `Detect CloudFormation stack drift:
 
 1. Use cloudformation MCP to trigger drift detection
@@ -1128,7 +1128,7 @@ Fix HIGH drift:
 This will revert the unauthorised security group rule.`
   },
   'runbook': {
-    link: 'skills/runbooks/runbook-gen.md',
+    link: 'skills/runbook/SKILL.md',
     prompt: `Generate a production SRE runbook from the open template.
 
 Include:
@@ -1161,7 +1161,7 @@ aws ecs update-service --cluster ecommerce-prod \\
 \`\`\``
   },
   'incident': {
-    link: 'skills/runbooks/incident-summary.md',
+    link: 'skills/incident/SKILL.md',
     prompt: `Help manage an ongoing incident or draft a post-mortem.
 
 For live incidents: generate stakeholder Slack update +
@@ -1193,7 +1193,7 @@ and action items table with owners and due dates.`,
 2. Lower alert threshold from 5% → 1% | SRE | +1 week`
   },
   'capacity-report': {
-    link: 'skills/cost/capacity-report.md',
+    link: 'skills/capacity-report/SKILL.md',
     prompt: `Generate a monthly capacity and cost report.
 
 Collect via MCP tools:
